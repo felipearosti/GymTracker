@@ -16,7 +16,7 @@ import { computeFatigue, computeKByMuscle, FATIGUE_LOOKBACK_HOURS } from './fati
 
 const USER_ID = 'user_default';
 const MODEL = 'gemini-2.5-flash';
-const MAX_TOKENS = 800;
+const MAX_TOKENS = 2048;
 const HISTORY_MESSAGE_LIMIT = 10;
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY ?? '' });
@@ -301,7 +301,14 @@ export async function askCoach(
       resp = await ai.models.generateContent({
         model: MODEL,
         contents,
-        config: { systemInstruction, maxOutputTokens: MAX_TOKENS, temperature: 0.7 },
+        config: {
+          systemInstruction,
+          maxOutputTokens: MAX_TOKENS,
+          temperature: 0.7,
+          // Desliga "thinking" pra não gastar tokens internos (Gemini 2.5 Flash
+          // por padrão usa parte do budget pra raciocinar, truncando a resposta).
+          thinkingConfig: { thinkingBudget: 0 },
+        },
       });
       lastErr = null;
       break;
