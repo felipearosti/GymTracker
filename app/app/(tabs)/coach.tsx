@@ -12,7 +12,6 @@ import {
   Alert,
 } from 'react-native';
 import { useFocusEffect } from 'expo-router';
-import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { api } from '../../src/services/api';
 
 type Msg = { id: string; role: 'user' | 'assistant'; content: string; createdAt: string };
@@ -34,7 +33,6 @@ export default function CoachScreen() {
   const [sending, setSending] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
   const scrollRef = useRef<ScrollView>(null);
-  const tabBarHeight = useBottomTabBarHeight();
 
   const loadAll = useCallback(async () => {
     try {
@@ -127,7 +125,7 @@ export default function CoachScreen() {
     <KeyboardAvoidingView
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      keyboardVerticalOffset={tabBarHeight}
+      keyboardVerticalOffset={0}
     >
       <View style={styles.header}>
         <View>
