@@ -1,6 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import { prisma } from '../prisma/client';
-import { askCoach, PRESET_PROMPTS } from '../lib/coach';
+import { askCoach, CoachError, PRESET_PROMPTS } from '../lib/coach';
 
 const USER_ID = 'user_default';
 const DAILY_LIMIT = 10;
@@ -107,7 +107,13 @@ export async function coachRoutes(app: FastifyInstance) {
         };
       } catch (e: any) {
         app.log.error(e, 'Coach error');
-        return reply.status(500).send({ error: e?.message ?? 'Erro no coach' });
+        // Rollback: mensagem do user foi salva antes do askCoach.
+        // Se o coach falhou, removemos pra não consumir o limite diário.
+        await prisma.chatMessage.delete({ where: { id: userMsg.id } }).catch(() => {});
+        const userMsgText = e instanceof CoachError
+          ? e.userMessage
+          : 'Erro ao falar com o Coach. Tenta de novo em alguns segundos.';
+        return reply.status(503).send({ error: userMsgText });
       }
     },
   );

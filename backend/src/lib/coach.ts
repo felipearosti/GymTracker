@@ -21,6 +21,30 @@ const HISTORY_MESSAGE_LIMIT = 10;
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY ?? '' });
 
+export class CoachError extends Error {
+  constructor(public userMessage: string) {
+    super(userMessage);
+    this.name = 'CoachError';
+  }
+}
+
+function parseCoachError(e: unknown): string {
+  const raw = String((e as any)?.message ?? e ?? '');
+  if (raw.includes('UNAVAILABLE') || raw.includes('503') || raw.includes('overloaded')) {
+    return 'O Coach está temporariamente sobrecarregado. Tenta de novo em alguns segundos.';
+  }
+  if (raw.includes('429') || raw.includes('RESOURCE_EXHAUSTED')) {
+    return 'Limite de requisições ao modelo atingido. Tenta de novo daqui a pouco.';
+  }
+  if (raw.includes('API_KEY') || raw.includes('401') || raw.includes('PERMISSION_DENIED')) {
+    return 'Chave do Coach inválida. Avise o admin.';
+  }
+  if (raw.includes('SAFETY')) {
+    return 'A pergunta foi bloqueada pelo filtro de segurança do modelo. Reformula e tenta de novo.';
+  }
+  return 'Erro ao falar com o Coach. Tenta de novo em alguns segundos.';
+}
+
 const GOAL_LABEL: Record<string, string> = {
   cutting: 'cutting (perder gordura)',
   bulking: 'bulking (ganhar massa)',
@@ -268,15 +292,29 @@ export async function askCoach(
     { role: 'user', parts: [{ text: dynamicContext }] },
   ];
 
-  const resp = await ai.models.generateContent({
-    model: MODEL,
-    contents,
-    config: {
-      systemInstruction,
-      maxOutputTokens: MAX_TOKENS,
-      temperature: 0.7,
-    },
-  });
+  // Retry com backoff pra erros transientes do Gemini (503 UNAVAILABLE, 429 rate limit)
+  const MAX_RETRIES = 2;
+  let resp: Awaited<ReturnType<typeof ai.models.generateContent>> | null = null;
+  let lastErr: unknown = null;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      resp = await ai.models.generateContent({
+        model: MODEL,
+        contents,
+        config: { systemInstruction, maxOutputTokens: MAX_TOKENS, temperature: 0.7 },
+      });
+      lastErr = null;
+      break;
+    } catch (e: any) {
+      lastErr = e;
+      const msg = String(e?.message ?? '');
+      const transient = msg.includes('UNAVAILABLE') || msg.includes('503') || msg.includes('overloaded') || msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED');
+      if (!transient || attempt === MAX_RETRIES) throw new CoachError(parseCoachError(e));
+      // backoff: 1s, 3s
+      await new Promise((r) => setTimeout(r, attempt === 0 ? 1000 : 3000));
+    }
+  }
+  if (!resp) throw new CoachError(parseCoachError(lastErr));
 
   const text = resp.text ?? '';
   const usage = resp.usageMetadata;
