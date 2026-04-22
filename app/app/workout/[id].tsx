@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, TextInput, StyleSheet,
-  Alert, ActivityIndicator, Linking, KeyboardAvoidingView, Platform,
+  Alert, ActivityIndicator, Linking, KeyboardAvoidingView, Platform, AppState,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { api } from '../../src/services/api';
@@ -42,6 +42,7 @@ export default function WorkoutScreen() {
   });
 
   const startTime = useRef<number>(Date.now());
+  const restEndsAt = useRef<number>(0);
   const elapsedInterval = useRef<ReturnType<typeof setInterval> | null>(null);
   const restInterval = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -82,24 +83,45 @@ export default function WorkoutScreen() {
     elapsedInterval.current = setInterval(() => {
       setElapsed(Date.now() - startTime.current);
     }, 1000);
+
+    // Quando app volta do background, recalcula o timer imediatamente
+    // (setInterval pausa em background no Android).
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next !== 'active') return;
+      setElapsed(Date.now() - startTime.current);
+      if (restEndsAt.current > 0) {
+        const remainingMs = restEndsAt.current - Date.now();
+        if (remainingMs <= 0) {
+          if (restInterval.current) clearInterval(restInterval.current);
+          restInterval.current = null;
+          setRestTimer((prev) => ({ active: false, remaining: 0, total: prev.total }));
+        } else {
+          setRestTimer((prev) => ({ ...prev, remaining: Math.ceil(remainingMs / 1000) }));
+        }
+      }
+    });
+
     return () => {
       if (elapsedInterval.current) clearInterval(elapsedInterval.current);
       if (restInterval.current) clearInterval(restInterval.current);
+      sub.remove();
     };
   }, [load]);
 
   const startRestTimer = (seconds: number) => {
     if (restInterval.current) clearInterval(restInterval.current);
+    restEndsAt.current = Date.now() + seconds * 1000;
     setRestTimer({ active: true, remaining: seconds, total: seconds });
     restInterval.current = setInterval(() => {
-      setRestTimer((prev) => {
-        if (prev.remaining <= 1) {
-          clearInterval(restInterval.current!);
-          return { active: false, remaining: 0, total: prev.total };
-        }
-        return { ...prev, remaining: prev.remaining - 1 };
-      });
-    }, 1000);
+      const remainingMs = restEndsAt.current - Date.now();
+      if (remainingMs <= 0) {
+        clearInterval(restInterval.current!);
+        restInterval.current = null;
+        setRestTimer((prev) => ({ active: false, remaining: 0, total: prev.total }));
+        return;
+      }
+      setRestTimer((prev) => ({ ...prev, remaining: Math.ceil(remainingMs / 1000) }));
+    }, 250);
   };
 
   const completeSet = async (exercise: Exercise, setIndex: number) => {
@@ -132,6 +154,36 @@ export default function WorkoutScreen() {
     } catch {
       Alert.alert('Erro', 'Não foi possível registrar a série.');
     }
+  };
+
+  const uncompleteSet = (exercise: Exercise, setIndex: number) => {
+    Alert.alert(
+      'Desmarcar série?',
+      'A série será removida e você poderá editar os valores.',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Desmarcar',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await api.del(
+                `/api/sessions/${id}/sets?exerciseId=${exercise.id}&setNumber=${setIndex + 1}`,
+              );
+              setExerciseState((prev) => {
+                const updated = { ...prev };
+                const updatedSets = [...updated[exercise.id].sets];
+                updatedSets[setIndex] = { ...updatedSets[setIndex], completed: false };
+                updated[exercise.id] = { ...updated[exercise.id], sets: updatedSets };
+                return updated;
+              });
+            } catch {
+              Alert.alert('Erro', 'Não foi possível desmarcar a série.');
+            }
+          },
+        },
+      ],
+    );
   };
 
   const updateField = (exerciseId: string, setIndex: number, field: 'weight' | 'reps', value: string) => {
@@ -251,7 +303,9 @@ export default function WorkoutScreen() {
                   />
                   <TouchableOpacity
                     style={[styles.checkBtn, draft.completed && styles.checkBtnDone]}
-                    onPress={() => !draft.completed && completeSet(exercise, i)}
+                    onPress={() =>
+                      draft.completed ? uncompleteSet(exercise, i) : completeSet(exercise, i)
+                    }
                   >
                     <Text style={styles.checkText}>{draft.completed ? '✓' : '○'}</Text>
                   </TouchableOpacity>

@@ -16,6 +16,26 @@ export async function sessionRoutes(app: FastifyInstance) {
     return reply.status(201).send(session);
   });
 
+  // GET /api/sessions/active — sessão em andamento (finishedAt = null)
+  app.get('/api/sessions/active', async () => {
+    const active = await prisma.session.findFirst({
+      where: { userId: USER_ID, finishedAt: null },
+      orderBy: { startedAt: 'desc' },
+      include: { workout: true, sets: true },
+    });
+    if (!active) return { active: null };
+    return {
+      active: {
+        id: active.id,
+        workoutId: active.workoutId,
+        workoutCode: active.workout.code,
+        workoutName: active.workout.name,
+        startedAt: active.startedAt.toISOString(),
+        setsCount: active.sets.length,
+      },
+    };
+  });
+
   // GET /api/sessions — list history
   app.get<{ Querystring: { limit?: string; offset?: string } }>('/api/sessions', async (req) => {
     const limit = parseInt(req.query.limit ?? '20');
@@ -96,6 +116,28 @@ export async function sessionRoutes(app: FastifyInstance) {
       include: { exercise: true },
     });
     return reply.status(201).send(set);
+  });
+
+  // DELETE /api/sessions/:id/sets — remove um set específico por exerciseId+setNumber
+  app.delete<{
+    Params: { id: string };
+    Querystring: { exerciseId?: string; setNumber?: string };
+  }>('/api/sessions/:id/sets', async (req, reply) => {
+    const { exerciseId, setNumber } = req.query;
+    if (!exerciseId || !setNumber) {
+      return reply.status(400).send({ error: 'exerciseId e setNumber required' });
+    }
+    const deleted = await prisma.sessionSet.deleteMany({
+      where: {
+        sessionId: req.params.id,
+        exerciseId,
+        setNumber: parseInt(setNumber),
+      },
+    });
+    if (deleted.count === 0) {
+      return reply.status(404).send({ error: 'Set não encontrado' });
+    }
+    return reply.status(204).send();
   });
 
   // GET /api/sessions/:id/report

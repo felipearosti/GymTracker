@@ -1,13 +1,25 @@
 const BASE_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://10.0.2.2:3000';
 
+async function extractError(res: Response): Promise<string> {
+  const raw = await res.text();
+  try {
+    const parsed = JSON.parse(raw);
+    if (typeof parsed?.error === 'string') return parsed.error;
+    if (typeof parsed?.message === 'string') return parsed.message;
+  } catch {
+    // não é JSON — devolve o raw se for curto, senão mensagem genérica
+  }
+  if (raw && raw.length < 200) return raw;
+  return `Erro ${res.status}`;
+}
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE_URL}${path}`, {
     headers: { 'Content-Type': 'application/json', ...options?.headers },
     ...options,
   });
   if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`API ${res.status}: ${err}`);
+    throw new Error(await extractError(res));
   }
   return res.json();
 }
@@ -15,8 +27,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 async function requestNoBody(path: string, options?: RequestInit): Promise<void> {
   const res = await fetch(`${BASE_URL}${path}`, { ...options });
   if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`API ${res.status}: ${err}`);
+    throw new Error(await extractError(res));
   }
 }
 

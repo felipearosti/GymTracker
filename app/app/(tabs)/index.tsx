@@ -8,9 +8,18 @@ import {
   ActivityIndicator,
   Alert,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { api } from '../../src/services/api';
 import { Workout } from '../../src/types';
+
+type ActiveSession = {
+  id: string;
+  workoutId: string;
+  workoutCode: string;
+  workoutName: string;
+  startedAt: string;
+  setsCount: number;
+};
 
 const DAY_NAMES = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
 const MONTH_NAMES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
@@ -30,16 +39,19 @@ export default function HomeScreen() {
   const router = useRouter();
   const [todayData, setTodayData] = useState<{ today: Workout | null; rest: boolean; nextWorkout?: Workout } | null>(null);
   const [allWorkouts, setAllWorkouts] = useState<Workout[]>([]);
+  const [active, setActive] = useState<ActiveSession | null>(null);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
     try {
-      const [todayRes, allRes] = await Promise.all([
+      const [todayRes, allRes, activeRes] = await Promise.all([
         api.get<{ today: Workout | null; rest: boolean; nextWorkout?: Workout }>('/api/workouts/today'),
         api.get<Workout[]>('/api/workouts'),
+        api.get<{ active: ActiveSession | null }>('/api/sessions/active').catch(() => ({ active: null })),
       ]);
       setTodayData(todayRes);
       setAllWorkouts(allRes);
+      setActive(activeRes.active);
     } catch (e) {
       Alert.alert('Erro', 'Não foi possível conectar ao servidor. Verifique se o backend está rodando.');
     } finally {
@@ -48,6 +60,31 @@ export default function HomeScreen() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+  useFocusEffect(useCallback(() => { load(); }, [load]));
+
+  const discardActive = () => {
+    if (!active) return;
+    Alert.alert(
+      'Descartar treino em andamento?',
+      'Você vai perder os sets já registrados nesse treino.',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Descartar',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await api.del(`/api/sessions/${active.id}`);
+              setActive(null);
+              load();
+            } catch {
+              Alert.alert('Erro', 'Não foi possível descartar.');
+            }
+          },
+        },
+      ],
+    );
+  };
 
   const openWorkout = (workoutId: string) => {
     router.push(`/workout-preview/${workoutId}`);
@@ -71,6 +108,31 @@ export default function HomeScreen() {
         <Text style={styles.greeting}>{greeting()} 💪</Text>
         <Text style={styles.date}>{formatDate(now)}</Text>
       </View>
+
+      {active && (
+        <View style={styles.activeCard}>
+          <View style={styles.activeBadge}>
+            <Text style={styles.activeBadgeText}>● TREINO EM ANDAMENTO</Text>
+          </View>
+          <Text style={styles.activeName}>
+            {active.workoutCode} — {active.workoutName}
+          </Text>
+          <Text style={styles.activeMeta}>
+            {active.setsCount} série{active.setsCount === 1 ? '' : 's'} registrada{active.setsCount === 1 ? '' : 's'}
+          </Text>
+          <View style={styles.activeBtnRow}>
+            <TouchableOpacity
+              style={styles.resumeBtn}
+              onPress={() => router.push(`/workout/${active.id}`)}
+            >
+              <Text style={styles.resumeBtnText}>CONTINUAR</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.discardBtn} onPress={discardActive}>
+              <Text style={styles.discardBtnText}>Descartar</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
 
       {todayData?.rest ? (
         <View style={styles.restCard}>
@@ -188,4 +250,40 @@ const styles = StyleSheet.create({
   upcomingMeta: { color: '#6b7280', fontSize: 12, marginTop: 2 },
   upcomingBtn: { padding: 8 },
   upcomingBtnText: { color: '#60a5fa', fontSize: 18 },
+  activeCard: {
+    backgroundColor: '#14532d',
+    borderRadius: 16,
+    padding: 20,
+    marginBottom: 24,
+    borderWidth: 1,
+    borderColor: '#16a34a',
+  },
+  activeBadge: {
+    backgroundColor: '#16a34a',
+    borderRadius: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    alignSelf: 'flex-start',
+    marginBottom: 10,
+  },
+  activeBadgeText: { color: '#fff', fontSize: 11, fontWeight: '700', letterSpacing: 1 },
+  activeName: { color: '#f9fafb', fontSize: 20, fontWeight: '700', marginBottom: 4 },
+  activeMeta: { color: '#86efac', fontSize: 13, marginBottom: 16 },
+  activeBtnRow: { flexDirection: 'row', gap: 10 },
+  resumeBtn: {
+    flex: 1,
+    backgroundColor: '#16a34a',
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  resumeBtnText: { color: '#fff', fontSize: 15, fontWeight: '700', letterSpacing: 1 },
+  discardBtn: {
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#374151',
+  },
+  discardBtnText: { color: '#9ca3af', fontSize: 13, fontWeight: '600' },
 });
